@@ -6,12 +6,16 @@ variable "region" {
 variable "profile" {
   type        = string
   description = "The AWS profile to use for authentication"
-  default     = "demo"
+  default     = "prod"
 }
 variable "ami" {
   type        = string
   description = "The ami id to use for building instances"
-  default     = "ami-0555fb873f696dcaa"
+  default     = "ami-076ecead14c730c7e"
+}
+
+variable "zone_id" {
+  type = string
 }
 
 resource "random_string" "bucket_name" {
@@ -352,6 +356,14 @@ resource "aws_s3_bucket_acl" "bucket" {
   acl    = "private"
 }
 
+# resource "aws_s3_bucket_public_access_block" "bucket" {
+#   bucket = aws_s3_bucket.bucket.id
+#   block_public_acls       = true
+#   block_public_policy     = true
+#   ignore_public_acls      = true
+#   restrict_public_buckets = true
+# }
+
 
 
 # 创建IAM policy
@@ -374,7 +386,7 @@ resource "aws_iam_policy" "s3_policy" {
           "Effect" : "Allow",
           "Resource" : [
             "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}",
-          "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}/*"]
+            "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}/*"]
         },
         {
           Effect   = "Allow",
@@ -382,7 +394,7 @@ resource "aws_iam_policy" "s3_policy" {
           Resource = "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}"
         }
       ]
-  })
+    })
 
 }
 
@@ -420,10 +432,10 @@ resource "aws_iam_instance_profile" "profile" {
 }
 
 #创建route53 record
-resource "aws_route53_record" "aws_a_record"{
-  zone_id=data.aws_availability_zones.available.names[0]
-  name="dev.leiyang.me"
-  type = "A"
-  ttl = "60"
-  records = [aws_instance.example.public_ip]
+resource "aws_route53_record" "aws_a_record" {
+  zone_id = var.zone_id
+  name    = "kittyman.me"
+  type    = "A"
+  ttl     = "60"
+  records = [aws_eip.public_ips[0].id]
 }
