@@ -132,7 +132,7 @@ resource "aws_route" "public_igw_route" {
 }
 
 
-# 创建webapp安全组，22,80,443开放TCP请求接收，发出请求无限制
+# 创建webapp安全组，22,80,443开放TCP请求接收，发出请求无限制  
 resource "aws_security_group" "webapp_sg" {
   name_prefix = "webapp-sg-"
   vpc_id      = aws_vpc.mainvpc.id
@@ -194,7 +194,7 @@ resource "aws_instance" "example_ec2" {
   sed -i "s|password:.*|password: ${aws_db_instance.db.password}|g" /tmp/application.yml
   sed -i "s|url:.*|url: jdbc:mysql://${aws_db_instance.db.endpoint}/csye6225?autoReconnect=true\&useSSL=false\&createDatabaseIfNotExist=true|g" /tmp/application.yml
   sed -i "s|bucket-name:.*|bucket-name: ${aws_s3_bucket.bucket.bucket}|g" /tmp/application.yml
-
+ 
   # Start the webapp
   cd /tmp
   java -jar /tmp/demo-1.0-SNAPSHOT.jar -Dspring.config.location=/tmp/application.yml
