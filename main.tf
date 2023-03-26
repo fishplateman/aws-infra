@@ -202,6 +202,7 @@ resource "aws_instance" "example_ec2" {
   sed -i "s|password:.*|password: ${aws_db_instance.db.password}|g" /tmp/application.yml
   sed -i "s|url:.*|url: jdbc:mysql://${aws_db_instance.db.endpoint}/csye6225?autoReconnect=true\&useSSL=false\&createDatabaseIfNotExist=true|g" /tmp/application.yml
   sed -i "s|bucket-name:.*|bucket-name: ${aws_s3_bucket.bucket.bucket}|g" /tmp/application.yml
+  sed -i "s|region:.*|region: ${var.region}|g" /tmp/application.yml
  
   # Start the webapp
   cd /tmp
