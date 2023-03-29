@@ -11,7 +11,7 @@ variable "profile" {
 variable "ami" {
   type        = string
   description = "The ami id to use for building instances"
-  default     = "ami-0a594f575210579f9"
+  default     = "ami-0e3e11e7269c36be6"
 }
 
 variable "zone_id" {
@@ -24,6 +24,10 @@ variable "subdomain" {
   type        = string
   description = "The subdomain name"
   default     = "demo.kittyman.me"
+}
+
+locals {
+  cloudwatch_namespace = "webapp"
 }
 
 resource "random_string" "bucket_name" {
@@ -140,7 +144,7 @@ resource "aws_route" "public_igw_route" {
 }
 
 
-# 创建webapp安全组，22,80,443开放TCP请求接收，发出请求无限制  
+# 创建webapp安全组，22,80,443开放TCP请求接收，发出请求无限制
 resource "aws_security_group" "webapp_sg" {
   name_prefix = "webapp-sg-"
   vpc_id      = aws_vpc.mainvpc.id
@@ -202,11 +206,9 @@ resource "aws_instance" "example_ec2" {
   sed -i "s|password:.*|password: ${aws_db_instance.db.password}|g" /tmp/application.yml
   sed -i "s|url:.*|url: jdbc:mysql://${aws_db_instance.db.endpoint}/csye6225?autoReconnect=true\&useSSL=false\&createDatabaseIfNotExist=true|g" /tmp/application.yml
   sed -i "s|bucket-name:.*|bucket-name: ${aws_s3_bucket.bucket.bucket}|g" /tmp/application.yml
-  sed -i "s|region:.*|region: ${var.region}|g" /tmp/application.yml
- 
+
   # Start the webapp
-  cd /tmp
-  java -jar /tmp/demo-1.0-SNAPSHOT.jar -Dspring.config.location=/tmp/application.yml
+  sudo systemctl restart webapp
   EOF
   count     = 3
   subnet_id = aws_subnet.public[count.index].id
@@ -340,16 +342,6 @@ resource "aws_s3_bucket_acl" "bucket" {
   acl    = "private"
 }
 
-# resource "aws_s3_bucket_public_access_block" "bucket" {
-#   bucket = aws_s3_bucket.bucket.id
-#   block_public_acls       = true
-#   block_public_policy     = true
-#   ignore_public_acls      = true
-#   restrict_public_buckets = true
-# }
-
-
-
 # 创建IAM policy
 resource "aws_iam_policy" "s3_policy" {
   name        = "WebAppS3"
@@ -370,17 +362,26 @@ resource "aws_iam_policy" "s3_policy" {
           "Effect" : "Allow",
           "Resource" : [
             "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}",
-          "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}/*"]
+            "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}/*"
+          ]
         },
         {
           Effect   = "Allow",
-          Action   = ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetLifeCycleConfiguration"],
-          Resource = "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}"
+          Action   = [
+            "s3:ListBucket",
+            "s3:GetBucketLocation",
+            "s3:GetLifeCycleConfiguration"
+          ],
+          Resource = [
+            "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}",
+            "arn:aws:s3:::${aws_s3_bucket.bucket.bucket}/*"
+          ]
         }
       ]
   })
 
 }
+
 
 # 创建了一个名为EC2-CSYE6225的IAM角色，
 # 该角色允许EC2服务假装成这个角色来访问其他资源。
@@ -406,6 +407,12 @@ resource "aws_iam_role" "ec2_role" {
 # 把IAM role绑定上IAM policy
 resource "aws_iam_role_policy_attachment" "ec2_policy_attachment" {
   policy_arn = aws_iam_policy.s3_policy.arn
+  role       = aws_iam_role.ec2_role.name
+}
+
+# 将 CloudWatch IAM policy 附加到 IAM 角色
+resource "aws_iam_role_policy_attachment" "cloudwatch_policy_attachment" {
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
   role       = aws_iam_role.ec2_role.name
 }
 
