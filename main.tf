@@ -11,7 +11,7 @@ variable "profile" {
 variable "ami" {
   type        = string
   description = "The ami id to use for building instances"
-  default     = "ami-0e3e11e7269c36be6"
+  default     = "ami-09753caebba6df40e"
 }
 
 variable "zone_id" {
@@ -150,30 +150,66 @@ resource "aws_security_group" "webapp_sg" {
   vpc_id      = aws_vpc.mainvpc.id
 
   ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "TCP"
+    from_port       = 22
+    to_port         = 22
+    protocol        = "TCP"
+    cidr_blocks     = ["10.0.0.0/16"]
+    security_groups = [aws_security_group.lb_sg.id]
+  }
+
+  ingress {
+    from_port       = 8080
+    to_port         = 8080
+    protocol        = "TCP"
+    cidr_blocks     = ["10.0.0.0/16"]
+    security_groups = [aws_security_group.lb_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+}
+
+# user data模板
+data "template_file" "user_data" {
+  template = <<EOF
+#!/bin/bash
+echo "Configuring webapp with environment variables"
+sudo yum update -y
+sudo yum upgrade -y
+sudo yum clean all
+sudo yum install -y sed
+
+# Replace database credentials and S3 bucket name in application.yml
+sed -i "s|username:.*|username: ${aws_db_instance.db.username}|g" /tmp/application.yml
+sed -i "s|password:.*|password: ${aws_db_instance.db.password}|g" /tmp/application.yml
+sed -i "s|url:.*|url: jdbc:mysql://${aws_db_instance.db.endpoint}/csye6225?autoReconnect=true\&useSSL=false\&createDatabaseIfNotExist=true|g" /tmp/application.yml
+sed -i "s|bucket-name:.*|bucket-name: ${aws_s3_bucket.bucket.bucket}|g" /tmp/application.yml
+
+# Start the webapp
+sudo systemctl restart webapp
+EOF
+}
+
+# 负载均衡安全组
+resource "aws_security_group" "lb_sg" {
+  name   = "load_balancer_sg"
+  vpc_id = aws_vpc.mainvpc.id
 
   ingress {
     from_port   = 80
     to_port     = 80
-    protocol    = "TCP"
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
   ingress {
     from_port   = 443
     to_port     = 443
-    protocol    = "TCP"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "TCP"
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -185,57 +221,208 @@ resource "aws_security_group" "webapp_sg" {
   }
 }
 
-# 创建3个instances
-resource "aws_instance" "example_ec2" {
-  ami                         = var.ami
-  instance_type               = "t2.micro"
-  associate_public_ip_address = true
-  key_name                    = "my-key"
-  iam_instance_profile        = aws_iam_instance_profile.profile.name
-  # user_data = file("user_data.sh")
-  user_data = <<EOF
-  #!/bin/bash
-  echo "Configuring webapp with environment variables"
-  sudo yum update -y
-  sudo yum upgrade -y
-  sudo yum clean all
-  sudo yum install -y sed
+# 启动模板
+resource "aws_launch_template" "lt" {
+  name = "example_launch_template"
 
-  # Replace database credentials and S3 bucket name in application.yml
-  sed -i "s|username:.*|username: ${aws_db_instance.db.username}|g" /tmp/application.yml
-  sed -i "s|password:.*|password: ${aws_db_instance.db.password}|g" /tmp/application.yml
-  sed -i "s|url:.*|url: jdbc:mysql://${aws_db_instance.db.endpoint}/csye6225?autoReconnect=true\&useSSL=false\&createDatabaseIfNotExist=true|g" /tmp/application.yml
-  sed -i "s|bucket-name:.*|bucket-name: ${aws_s3_bucket.bucket.bucket}|g" /tmp/application.yml
+  image_id      = var.ami
+  instance_type = "t2.micro"
+  key_name      = "my-key"
+  user_data     = base64encode(data.template_file.user_data.rendered)
 
-  # Start the webapp
-  sudo systemctl restart webapp
-  EOF
-  count     = 3
-  subnet_id = aws_subnet.public[count.index].id
-  vpc_security_group_ids = [
-    aws_security_group.webapp_sg.id,
-  ]
-  disable_api_termination = true
+  iam_instance_profile {
+    name = aws_iam_instance_profile.profile.name
+  }
+
+  block_device_mappings {
+    device_name = "/dev/xvda"
+
+    ebs {
+      volume_size           = 50
+      volume_type           = "gp2"
+      delete_on_termination = true
+    }
+  }
+
+  monitoring {
+    enabled = true
+  }
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.webapp_sg.id]
+  }
+}
+
+# 扩展策略
+resource "aws_autoscaling_policy" "asg_scale_out_policy" {
+  name                   = "scale_out_policy"
+  autoscaling_group_name = aws_autoscaling_group.asg.name
+  policy_type            = "SimpleScaling"
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = 1
+  cooldown               = 60
+}
+
+# 收缩策略
+resource "aws_autoscaling_policy" "asg_scale_in_policy" {
+  name                   = "scale_in_policy"
+  autoscaling_group_name = aws_autoscaling_group.asg.name
+  policy_type            = "SimpleScaling"
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = -1
+  cooldown               = 60
+}
+
+resource "aws_cloudwatch_metric_alarm" "scale_out_alarm" {
+  alarm_name          = "scale_out_alarm"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "5"
+  alarm_description   = "This metric checks if the CPU usage is greater than or equal to 5%"
+  alarm_actions       = [aws_autoscaling_policy.asg_scale_out_policy.arn]
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.asg.name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "scale_in_alarm" {
+  alarm_name          = "scale_in_alarm"
+  comparison_operator = "LessThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "3"
+  alarm_description   = "This metric checks if the CPU usage is less than or equal to 3%"
+  alarm_actions       = [aws_autoscaling_policy.asg_scale_in_policy.arn]
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.asg.name
+  }
+}
+
+
+
+# 自动伸缩组
+resource "aws_autoscaling_group" "asg" {
+  name             = "csye6225-asg-spring2023"
+  min_size         = 1
+  max_size         = 3
+  desired_capacity = 1
+  default_cooldown = 60
+  # 一分钟
+  health_check_grace_period = 60
+  launch_template {
+    id      = aws_launch_template.lt.id
+    version = "$Latest"
+  }
+  target_group_arns   = [aws_lb_target_group.alb_tg.arn]
+  vpc_zone_identifier = [aws_subnet.public[0].id, aws_subnet.public[1].id, aws_subnet.public[2].id]
+
+  tag {
+    key                 = "Name"
+    value               = "csye6225-asg-instance"
+    propagate_at_launch = true
+  }
+}
+
+# 目标组
+resource "aws_lb_target_group" "alb_tg" {
+  name     = "csye6225-lb-alb-tg"
+  port     = 8080
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.mainvpc.id
+
+  target_type = "instance"
+
+  health_check {
+    interval            = 30
+    path                = "/healthz"
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    protocol            = "HTTP"
+    port                = 8080
+  }
+}
+
+# 创建 ACM 证书
+resource "aws_acm_certificate" "example_cert" {
+  domain_name       = var.subdomain
+  validation_method = "DNS"
+
+  tags = {
+    Terraform = "true"
+  }
+
   lifecycle {
     create_before_destroy = true
   }
 }
 
-# 创建volume
-resource "aws_ebs_volume" "example_volume" {
-  count             = 3
-  availability_zone = aws_instance.example_ec2[count.index].availability_zone
-  size              = 50
-  type              = "gp2"
+# 获取证书验证记录
+resource "aws_route53_record" "cert_validation_record" {
+  for_each = {
+  for dvo in aws_acm_certificate.example_cert.domain_validation_options : dvo.domain_name => {
+    name   = dvo.resource_record_name
+    record = dvo.resource_record_value
+    type   = dvo.resource_record_type
+  }
+  }
+
+  name    = each.value.name
+  type    = each.value.type
+  zone_id = var.zone_id
+  records = [each.value.record]
+  ttl     = 60
 }
 
-# 给每个instance挂载一个volume，挂载地址在instance的“/dev/sdh”地址
-resource "aws_volume_attachment" "example" {
-  device_name = "/dev/sdh"
-  count       = 3
-  volume_id   = aws_ebs_volume.example_volume[count.index].id
-  instance_id = aws_instance.example_ec2[count.index].id
+# 确认证书已经验证
+resource "aws_acm_certificate_validation" "example_cert_validation" {
+  certificate_arn         = aws_acm_certificate.example_cert.arn
+  validation_record_fqdns = [for record in aws_route53_record.cert_validation_record : record.fqdn]
 }
+
+# 创建 Application Load Balancer
+resource "aws_lb" "lb" {
+  name               = "csye6225-lb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.lb_sg.id]
+  subnets            = [aws_subnet.public[0].id, aws_subnet.public[1].id, aws_subnet.public[2].id]
+}
+
+# 负载均衡监听器HTTPS
+resource "aws_lb_listener" "front_end" {
+  load_balancer_arn = aws_lb.lb.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = aws_acm_certificate_validation.example_cert_validation.certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.alb_tg.arn
+  }
+}
+
+# 负载均衡监听器HTTP
+resource "aws_lb_listener" "http_front_end" {
+  load_balancer_arn = aws_lb.lb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.alb_tg.arn
+  }
+}
+
 
 # database 安全组
 resource "aws_security_group" "database_sg" {
@@ -275,7 +462,6 @@ resource "aws_db_parameter_group" "db_param_group" {
 }
 
 # RDS instance
-# 数量和private subnet数量对应
 resource "aws_db_instance" "db" {
   # count                  = 3
   # identifier             = "csye6225-${count.index}"
@@ -297,7 +483,6 @@ resource "aws_db_instance" "db" {
     DatabaseName = "csye6225"
   }
 }
-
 
 # 创建bucket
 resource "aws_s3_bucket" "bucket" {
@@ -366,8 +551,8 @@ resource "aws_iam_policy" "s3_policy" {
           ]
         },
         {
-          Effect   = "Allow",
-          Action   = [
+          Effect = "Allow",
+          Action = [
             "s3:ListBucket",
             "s3:GetBucketLocation",
             "s3:GetLifeCycleConfiguration"
@@ -378,7 +563,7 @@ resource "aws_iam_policy" "s3_policy" {
           ]
         }
       ]
-  })
+    })
 
 }
 
@@ -427,9 +612,15 @@ resource "aws_route53_record" "a_record" {
   zone_id = var.zone_id
   name    = var.subdomain
   type    = "A"
-  ttl     = "60"
-  records = [aws_instance.example_ec2[0].public_ip, aws_instance.example_ec2[1].public_ip, aws_instance.example_ec2[2].public_ip]
+
+  alias {
+    name                   = aws_lb.lb.dns_name
+    zone_id                = aws_lb.lb.zone_id
+    evaluate_target_health = true
+  }
+
   depends_on = [
-    aws_instance.example_ec2
+    aws_lb.lb
   ]
 }
+
