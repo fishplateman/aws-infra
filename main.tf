@@ -205,14 +205,6 @@ resource "aws_security_group" "lb_sg" {
   name   = "load_balancer_sg"
   vpc_id = aws_vpc.mainvpc.id
 
-  # 等下注释了
-#  ingress {
-#    from_port   = 80
-#    to_port     = 80
-#    protocol    = "tcp"
-#    cidr_blocks = ["0.0.0.0/0"]
-#  }
-
   ingress {
     from_port   = 443
     to_port     = 443
@@ -243,13 +235,13 @@ resource "aws_kms_key_policy" "ebs_policy" {
     "Id" : "key-policy",
     "Statement" : [
       {
-        "Sid": "AllowAdminUserToUpdateKeyPolicy",
-        "Effect": "Allow",
-        "Principal": {
-          "AWS": "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        "Sid" : "AllowAdminUserToUpdateKeyPolicy",
+        "Effect" : "Allow",
+        "Principal" : {
+          "AWS" : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
         },
-        "Action": ["kms:*"],
-        "Resource": "*"
+        "Action" : ["kms:*"],
+        "Resource" : "*"
       },
       {
         "Sid" : "Allow access to EC2 instances",
@@ -257,7 +249,7 @@ resource "aws_kms_key_policy" "ebs_policy" {
         "Principal" : {
           "AWS" : "${aws_iam_role.ec2_role.arn}"
         },
-        "Action": ["kms:*"],
+        "Action" : ["kms:*"],
         "Resource" : "${aws_kms_key.ebs.arn}"
       },
       {
@@ -267,7 +259,7 @@ resource "aws_kms_key_policy" "ebs_policy" {
           "AWS" : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
 
         },
-        "Action": ["kms:*"],
+        "Action" : ["kms:*"],
         "Resource" : "${aws_kms_key.ebs.arn}"
       }
     ]
@@ -465,20 +457,6 @@ resource "aws_lb_listener" "front_end" {
     target_group_arn = aws_lb_target_group.alb_tg.arn
   }
 }
-
-# 负载均衡监听器HTTP
-# Assignment9可以注释掉
-resource "aws_lb_listener" "http_front_end" {
-  load_balancer_arn = aws_lb.lb.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.alb_tg.arn
-  }
-}
-
 
 # database 安全组
 resource "aws_security_group" "database_sg" {
