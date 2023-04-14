@@ -3,31 +3,40 @@ variable "region" {
   description = "The AWS region to deploy resources"
   default     = "us-east-1"
 }
+
 variable "profile" {
   type        = string
   description = "The AWS profile to use for authentication"
-  default     = "demo"
+  default     = "prod"
 }
+
 variable "ami" {
   type        = string
   description = "The ami id to use for building instances"
-  default     = "ami-09753caebba6df40e"
+  default     = "ami-0763d07457f4e3451"
 }
 
 variable "zone_id" {
   type        = string
   description = "The zone id to use for building Route53"
-  default     = "Z05840372REQB8AHW5V22"
+  default     = "Z058133215K138373IBXU"
 }
 
 variable "subdomain" {
   type        = string
   description = "The subdomain name"
-  default     = "demo.kittyman.me"
+  default     = "kittyman.me"
 }
 
 locals {
   cloudwatch_namespace = "webapp"
+}
+
+data "aws_iam_role" "role" {
+  name = aws_iam_instance_profile.profile.role
+}
+
+data "aws_caller_identity" "current" {
 }
 
 resource "random_string" "bucket_name" {
@@ -103,10 +112,7 @@ resource "aws_internet_gateway" "gw" {
 # 创建公网路由表
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.mainvpc.id
-  # route {
-  #   cidr_block            = "0.0.0.0/0"
-  #   vpc_endpoint_id       = aws_vpc_endpoint.s3.id
-  # }
+
   tags = {
     Name = "MyPublicRoutetable"
   }
@@ -144,7 +150,7 @@ resource "aws_route" "public_igw_route" {
 }
 
 
-# 创建webapp安全组，22,80,443开放TCP请求接收，发出请求无限制
+# 创建webapp安全组，22,80,443开放TCP请求接收，发出请求无限制  
 resource "aws_security_group" "webapp_sg" {
   name_prefix = "webapp-sg-"
   vpc_id      = aws_vpc.mainvpc.id
@@ -199,6 +205,7 @@ resource "aws_security_group" "lb_sg" {
   name   = "load_balancer_sg"
   vpc_id = aws_vpc.mainvpc.id
 
+  # 等下注释了
   ingress {
     from_port   = 80
     to_port     = 80
@@ -221,6 +228,52 @@ resource "aws_security_group" "lb_sg" {
   }
 }
 
+# 创建CMK for ebs
+# 默认创建 Symmetric Key
+resource "aws_kms_key" "ebs" {
+  description = "EBS encryption key"
+  is_enabled  = true
+}
+
+resource "aws_kms_key_policy" "ebs_policy" {
+  key_id = aws_kms_key.ebs.key_id
+
+  policy = jsonencode({
+    "Version" : "2012-10-17",
+    "Id" : "key-policy",
+    "Statement" : [
+      {
+        "Sid": "AllowAdminUserToUpdateKeyPolicy",
+        "Effect": "Allow",
+        "Principal": {
+          "AWS": "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        },
+        "Action": ["kms:*"],
+        "Resource": "*"
+      },
+      {
+        "Sid" : "Allow access to EC2 instances",
+        "Effect" : "Allow",
+        "Principal" : {
+          "AWS" : "${aws_iam_role.ec2_role.arn}"
+        },
+        "Action": ["kms:*"],
+        "Resource" : "${aws_kms_key.ebs.arn}"
+      },
+      {
+        "Sid" : "Allow access to EC2 instances",
+        "Effect" : "Allow",
+        "Principal" : {
+          "AWS" : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
+
+        },
+        "Action": ["kms:*"],
+        "Resource" : "${aws_kms_key.ebs.arn}"
+      }
+    ]
+  })
+}
+
 # 启动模板
 resource "aws_launch_template" "lt" {
   name = "example_launch_template"
@@ -241,6 +294,8 @@ resource "aws_launch_template" "lt" {
       volume_size           = 50
       volume_type           = "gp2"
       delete_on_termination = true
+      encrypted             = true
+      kms_key_id            = aws_kms_key.ebs.arn
     }
   }
 
@@ -368,11 +423,11 @@ resource "aws_acm_certificate" "example_cert" {
 # 获取证书验证记录
 resource "aws_route53_record" "cert_validation_record" {
   for_each = {
-  for dvo in aws_acm_certificate.example_cert.domain_validation_options : dvo.domain_name => {
-    name   = dvo.resource_record_name
-    record = dvo.resource_record_value
-    type   = dvo.resource_record_type
-  }
+    for dvo in aws_acm_certificate.example_cert.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
   }
 
   name    = each.value.name
@@ -412,6 +467,7 @@ resource "aws_lb_listener" "front_end" {
 }
 
 # 负载均衡监听器HTTP
+# Assignment9可以注释掉
 resource "aws_lb_listener" "http_front_end" {
   load_balancer_arn = aws_lb.lb.arn
   port              = 80
@@ -461,10 +517,18 @@ resource "aws_db_parameter_group" "db_param_group" {
   description = "RDS Parameter Group"
 }
 
+# 创建 CMK for RDS
+# 默认 Symmetric Key
+resource "aws_kms_key" "rds" {
+  description = "RDS encryption key"
+  is_enabled  = true
+}
+
+
 # RDS instance
 resource "aws_db_instance" "db" {
-  # count                  = 3
-  # identifier             = "csye6225-${count.index}"
+  storage_encrypted      = true
+  kms_key_id             = aws_kms_key.rds.arn
   identifier             = "csye6225"
   allocated_storage      = 20
   engine                 = "MySQL"
@@ -563,7 +627,7 @@ resource "aws_iam_policy" "s3_policy" {
           ]
         }
       ]
-    })
+  })
 
 }
 
