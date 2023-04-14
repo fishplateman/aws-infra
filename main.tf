@@ -150,7 +150,7 @@ resource "aws_route" "public_igw_route" {
 }
 
 
-# 创建webapp安全组，22,80,443开放TCP请求接收，发出请求无限制
+# 创建webapp安全组，22,80,443开放TCP请求接收，发出请求无限制  
 resource "aws_security_group" "webapp_sg" {
   name_prefix = "webapp-sg-"
   vpc_id      = aws_vpc.mainvpc.id
@@ -423,11 +423,11 @@ resource "aws_acm_certificate" "example_cert" {
 # 获取证书验证记录
 resource "aws_route53_record" "cert_validation_record" {
   for_each = {
-  for dvo in aws_acm_certificate.example_cert.domain_validation_options : dvo.domain_name => {
-    name   = dvo.resource_record_name
-    record = dvo.resource_record_value
-    type   = dvo.resource_record_type
-  }
+    for dvo in aws_acm_certificate.example_cert.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
   }
 
   name    = each.value.name
@@ -627,7 +627,7 @@ resource "aws_iam_policy" "s3_policy" {
           ]
         }
       ]
-    })
+  })
 
 }
 
